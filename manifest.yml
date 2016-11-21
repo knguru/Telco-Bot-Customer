@@ -1,0 +1,9 @@
+---
+applications:
+- services:
+  - Telco-BOT
+  - dash111754
+  path: build/libs/conversation-enhanced-0.1-SNAPSHOT.war
+  memory: 512M
+  name: telco-bot-custservice
+  host: telco-bot-custservice

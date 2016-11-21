@@ -1,0 +1,18 @@
+package com.ibm.watson.apis.conversation_enhanced.payload;
+
+public class SubscriberPayload {
+
+	public String name="";
+	public int id=0;
+	public String divn="";
+	public String geo="";
+	public int status = -1;
+	public int stdroam = -1;
+	public int isdroam = -1;
+	public String vas = "";
+	public int voice = -1;
+	public int datapack = -1;
+	public String email = "";
+	
+}
+

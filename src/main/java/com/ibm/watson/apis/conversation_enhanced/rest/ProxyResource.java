@@ -1,0 +1,353 @@
+/**
+ * Copyright IBM Corp. 2016
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
+ * in compliance with the License. You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software distributed under the License
+ * is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
+ * or implied. See the License for the specific language governing permissions and limitations under
+ * the License.
+ */
+
+package com.ibm.watson.apis.conversation_enhanced.rest;
+
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.net.MalformedURLException;
+import java.text.DateFormat;
+import java.text.SimpleDateFormat;
+import java.util.Calendar;
+import java.util.Date;
+import java.util.HashMap;
+import java.util.List;
+import java.util.ArrayList;
+import java.util.Map;
+import java.lang.Integer;
+
+import javax.ws.rs.Consumes;
+import javax.ws.rs.POST;
+import javax.ws.rs.Path;
+import javax.ws.rs.PathParam;
+import javax.ws.rs.Produces;
+import javax.ws.rs.core.MediaType;
+import javax.ws.rs.core.Response;
+
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+import com.google.gson.Gson;
+import com.ibm.watson.apis.conversation_enhanced.payload.DocumentPayload;
+import com.ibm.watson.apis.conversation_enhanced.payload.PlanPayload ;
+
+import com.ibm.watson.apis.conversation_enhanced.payload.TopUsersPayload ;
+import com.ibm.watson.apis.conversation_enhanced.payload.SubscriberPayload; 
+import com.ibm.watson.apis.conversation_enhanced.payload.YearlySpend ;
+import com.ibm.watson.apis.conversation_enhanced.payload.IndBillPayload ;
+
+//import com.ibm.watson.apis.conversation_enhanced.retrieve_and_rank.Client;
+import com.ibm.watson.apis.conversation_enhanced.utils.Logging;
+import com.ibm.watson.apis.conversation_enhanced.utils.Messages;
+import com.ibm.watson.developer_cloud.conversation.v1_experimental.ConversationService;
+import com.ibm.watson.developer_cloud.conversation.v1_experimental.model.MessageRequest;
+import com.ibm.watson.developer_cloud.conversation.v1_experimental.model.MessageResponse;
+import com.ibm.watson.developer_cloud.service.exception.UnauthorizedException;
+import com.ibm.watson.developer_cloud.util.GsonSingleton;
+
+import com.ibm.watson.apis.conversation_enhanced.transaction.Transactions;
+import com.ibm.watson.apis.conversation_enhanced.utils.DayHelper;
+
+@Path("conversation/api/v1/workspaces")
+public class ProxyResource {
+  private static final Logger logger = LogManager.getLogger(ProxyResource.class.getName());
+
+  private static String API_VERSION;
+  private static String PASSWORD;
+  private static String URL;
+  private static String USERNAME;
+
+  private static boolean LOGGING_ENABLED = Boolean.parseBoolean(System.getenv("LOGGING_ENABLED"));
+
+  public static void setConversationAPIVersion(String version) {
+    API_VERSION = version;
+  }
+
+  public static void setCredentials(String username, String password, String url) {
+    USERNAME = username;
+    PASSWORD = password;
+    URL = url;
+  }
+
+  private MessageRequest buildMessageFromPayload(InputStream body) {
+    StringBuilder sbuilder = null;
+    BufferedReader reader = null;
+    try {
+      reader = new BufferedReader(new InputStreamReader(body, "UTF-8"));
+      sbuilder = new StringBuilder();
+      String str = reader.readLine();
+      while (str != null) {
+        sbuilder.append(str);
+        str = reader.readLine();
+        if (str != null) {
+          sbuilder.append("\n");
+        }
+      }
+      return GsonSingleton.getGson().fromJson(sbuilder.toString(), MessageRequest.class);
+    } catch (IOException e) {
+      logger.error(Messages.getString("ProxyResource.JSON_READ"), e);
+    } finally {
+      try {
+        reader.close();
+      } catch (IOException e) {
+        logger.error(Messages.getString("ProxyResource.STREAM_CLOSE"), e);
+      }
+    }
+    return null;
+  }
+  private String getDate(String dayUtterence)
+  {
+	  DayHelper dh = new DayHelper() ;
+	  String dayDate = dh.getDate(dayUtterence) ;
+	  return dayDate ;
+  }
+
+  /**
+   * This method is responsible for sending the query the user types into the UI to the Watson
+   * services. The code demonstrates how the conversation service is called, how the response is
+   * evaluated, and how the response is then sent to the retrieve and rank service if necessary.
+   * 
+   * @param request The full query the user asked of Watson
+   * @param id The ID of the conversational workspace
+   * @return The response from Watson. The response will always contain the conversation service's
+   *         response. If the intent confidence is high or the intent is out_of_scope, the response
+   *         will also contain information from the retrieve and rank service
+   */
+  private MessageResponse getWatsonResponse(MessageRequest request, String id) throws Exception {
+
+    // Configure the Watson Developer Cloud SDK to make a call to the appropriate conversation
+    // service. Specific information is obtained from the VCAP_SERVICES environment variable
+    ConversationService service =
+        new ConversationService(API_VERSION != null ? API_VERSION : ConversationService.VERSION_DATE_2016_05_19);
+    if (USERNAME != null || PASSWORD != null) {
+      service.setUsernameAndPassword(USERNAME, PASSWORD);
+    }
+    if (URL != null) {
+      service.setEndPoint(URL);
+    }
+
+    // Use the previously configured service object to make a call to the conversational service
+    MessageResponse response = service.message(id, request).execute();
+
+    // Determine if conversation's response is sufficient to answer the user's question or if we
+    // should call the retrieve and rank service to obtain better answers
+
+ 
+  
+    Map<String, Object> output = response.getOutput();
+ 
+    if (output == null) {
+      output = new HashMap<String, Object>();
+      response.setOutput(output);
+    }
+
+if (response.getContext().containsKey("trans"))
+{
+	String transType = (String) (response.getContext().get("trans")) ; 
+	logger.error(transType);
+	String customerId = (String)(response.getContext().get("customerId"));
+	logger.error(customerId);
+
+	//Check if the customer id given is valid
+	if (transType.equals("checkuser"))
+	{
+		logger.error("In status check");
+		Transactions trClient = new Transactions() ;
+    	SubscriberPayload payload = trClient.getSubscriber(customerId) ;
+   	  	String resp = "No such customer id exists in the database";
+		if (payload != null)
+		{
+			resp = "Hello <b><u>" +  payload.name   + "</u></b>. <br>What can I help you with?</i></p>";
+		}
+		output.put("text", "<i>" + resp + "</i>");	
+	}
+	
+	else if (transType.equals("sendmail"))
+	{
+		logger.error("In Send Mail");
+		Transactions trClient = new Transactions() ;
+    	SubscriberPayload payload = trClient.getSubscriber(customerId) ;
+		output.put("text", "<i>Your bill has been emailed to your registered email id : " + payload.email + "</i>");
+	}
+	else if (transType.equals("services"))
+	{
+		logger.error("In services");
+		Transactions trClient = new Transactions() ;
+    	PlanPayload payload = trClient.getSubscriberPlan(customerId) ;
+    	  	
+		output.put("text", "<i>You are subscribed to the plan <b>" + payload.name + ", Details : "+ payload.desc + "</b></i>");
+
+	}
+	else if (transType.equals("breakup"))
+	{
+		//Usage areas
+		logger.error("In usage areas");
+		String duration = (String)(response.getContext().get("duration"));
+		if (duration == null)
+		{
+			duration = "Month";
+		}
+		
+		Transactions trClient = new Transactions() ;
+		List<IndBillPayload> docs = null;
+		if (duration.equals("year"))
+		{
+			
+			 docs = trClient.getIndividualBills(customerId, 1);
+		}
+		else if (duration.equals("Month"))
+		{
+			
+			docs = trClient.getIndividualBills(customerId, 2);
+		}
+		else if (duration.equals("quarter"))
+		{
+			docs = trClient.getIndividualBills(customerId, 3);
+		}
+		StringBuffer sb = new StringBuffer("<b>YEAR,MONTH,CALLS(min),SMS,ROAMING(min),DATA(MB)</b><br>");
+		for (int i =0;i < docs.size() ;i++ )
+		{
+			IndBillPayload obj = (IndBillPayload)docs.get(i);
+			sb.append(obj.year);
+			sb.append("   ");
+			sb.append(obj.month);
+			sb.append("   ");
+			sb.append(obj.callDur);
+			sb.append("   ");
+			sb.append(obj.sms);
+			sb.append("   ");
+			sb.append(obj.roamDur);
+			sb.append("   ");
+			sb.append(obj.data);
+			sb.append("<BR>");
+			sb.append("<HR>");
+
+		}
+		output.put("text", "<i> <BR>" + sb +"</i>");
+	
+		response.getContext().remove("duration");
+		response.getContext().remove("adjust");
+		response.getContext().remove("LOB");
+		response.getContext().remove("noDur");
+	}
+	else if (transType.equals("spend"))
+	{
+		//adjust = this,last - duration
+		// duration = year,Month,quarter
+		//LOB=GMT,Gov,RCTG
+		logger.error("In Spend");
+		String duration = (String)(response.getContext().get("duration"));
+		if (duration == null)
+		{
+			duration = "Month";
+		}
+		
+		Transactions trClient = new Transactions() ;
+		List<IndBillPayload> docs = null;
+		if (duration.equals("year"))
+		{
+			
+			 docs = trClient.getIndividualBills(customerId, 1);
+		}
+		else if (duration.equals("Month"))
+		{
+			
+			docs = trClient.getIndividualBills(customerId, 2);
+		}
+		else if (duration.equals("quarter"))
+		{
+			docs = trClient.getIndividualBills(customerId, 3);
+		}
+		StringBuffer sb = new StringBuffer("<b>YEAR,MONTH,CALL CHARGES($),SMS CHARGES($),ROAMING CHARGES($),DATA CHARGES($),SVC TAX($),SURCHARGE($),TOTAL($)</b><br><i>");
+		for (int i =0;i < docs.size() ;i++ )
+		{
+			IndBillPayload obj = (IndBillPayload)docs.get(i);
+			sb.append(obj.year);
+			sb.append("   ");
+			sb.append(obj.month);
+			sb.append("   ");
+			sb.append(obj.callCost);
+			sb.append("   ");
+			sb.append(obj.smsCost);
+			sb.append("   ");
+			sb.append(obj.roamCost);
+			sb.append("   ");
+			sb.append(obj.dataCost);
+			sb.append("   ");
+			sb.append(obj.svcTax);
+			sb.append("   ");
+			sb.append(obj.surcharge);
+			sb.append("   ");
+			sb.append(obj.total);
+			sb.append("   ");
+			sb.append("<BR>");
+			sb.append("<HR>");
+
+		}
+		output.put("text", "<i> <BR>" + sb +"</i>");
+		//output.put ("text", "Spend for the specified period for " + lob + " = $" +  ys.total);
+		response.getContext().remove("duration");
+		response.getContext().remove("adjust");
+		response.getContext().remove("LOB");
+		response.getContext().remove("noDur");
+
+	}
+	//response.getContext().set("trans") = "non"; 
+	response.getContext().remove("trans") ;
+	//logger.error(response);
+
+}
+   return response;
+}
+
+@POST @Path("{id}/message") @Consumes(MediaType.APPLICATION_JSON) @Produces(MediaType.APPLICATION_JSON) public Response postMessage(
+      @PathParam("id") String id, InputStream body) {
+
+    HashMap<String, Object> errorsOutput = new HashMap<String, Object>();
+    MessageRequest request = buildMessageFromPayload(body);
+
+    if (request == null) {
+      throw new IllegalArgumentException(Messages.getString("ProxyResource.NO_REQUEST"));
+    }
+
+    MessageResponse response = null;
+
+    try {
+      response = getWatsonResponse(request, id);
+
+    } catch (Exception e) {
+      if (e instanceof UnauthorizedException) {
+        errorsOutput.put("error", Messages.getString("ProxyResource.INVALID_CONVERSATION_CREDS")); //$NON-NLS-1$
+      } else if (e instanceof IllegalArgumentException) {
+        errorsOutput.put("error", e.getMessage());
+      } else if (e instanceof MalformedURLException) {
+        errorsOutput.put("error", Messages.getString("ProxyResource.MALFORMED_URL")); //$NON-NLS-1$
+      } else if (e.getMessage().contains("URL workspaceid parameter is not a valid GUID.")) {
+        errorsOutput.put("error", Messages.getString("ProxyResource.INVALID_WORKSPACEID")); //$NON-NLS-1$
+      } else if (e.getMessage().contains("/fcselect.")) {
+        errorsOutput.put("error", Messages.getString("ProxyResource.INVALID_COLLECTION_NAME")); //$NON-NLS-1$
+      } else if (e.getMessage().contains("is not authorized for cluster") && e.getMessage().contains("and ranker")) {
+        errorsOutput.put("error", Messages.getString("ProxyResource.INVALID_RANKER_ID")); //$NON-NLS-1$
+      } else {
+        errorsOutput.put("error", Messages.getString("ProxyResource.GENERIC_ERROR")); //$NON-NLS-1$
+      }
+      logger.error(Messages.getString("ProxyResource.SOLR_QUERY_EXCEPTION") + e.getMessage()); //$NON-NLS-1$
+      return Response.ok(new Gson().toJson(errorsOutput, HashMap.class)).type(MediaType.APPLICATION_JSON).build();
+    }
+    return Response.ok(new Gson().toJson(response, MessageResponse.class)).type(MediaType.APPLICATION_JSON).build();
+  }
+}
+  
